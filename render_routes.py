@@ -109,6 +109,21 @@ async def delete_command(data: dict, authorization: str = Header(None)):
 
     return {"success": True}
 
+@router.post("/command/update")
+async def update_command(data: dict, authorization: str = Header(None)):
+
+    await verify_user(data["channel"], authorization)
+
+    data["command"] = data["command"].strip().lower()
+    data["response"] = data["response"].strip()
+
+    EVENT_QUEUE.append({
+        "type": "command.update",
+        "event": data
+    })
+
+    return {"success": True}
+
 
 # =========================
 # 💰 ECONOMY
@@ -193,6 +208,17 @@ async def delete_timed_message(data: dict, authorization: str = Header(None)):
 
     return {"success": True}
 
+@router.post("/timed/update")
+async def update_timed_message(data: dict, authorization: str = Header(None)):
+
+    await verify_user(data["channel"], authorization)
+
+    EVENT_QUEUE.append({
+        "type": "timed.update",
+        "event": data
+    })
+
+    return {"success": True}
 
 @router.get("/timed/list")
 async def timed_list(channel: str, authorization: str = Header(None)):

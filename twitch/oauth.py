@@ -207,3 +207,29 @@ async def verify_user(channel: str, authorization: str):
             raise HTTPException(status_code=403, detail="User not found")
 
         return data["data"][0]["login"]
+    
+async def get_current_user(token: str):
+
+    if not token:
+        return None
+
+    async with aiohttp.ClientSession() as session:
+
+        resp = await session.get(
+            "https://api.twitch.tv/helix/users",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Client-Id": CLIENT_ID
+            }
+        )
+
+        if resp.status != 200:
+            print("❌ Twitch API error:", resp.status)
+            return None
+
+        data = await resp.json()
+
+        if "data" not in data or not data["data"]:
+            return None
+
+        return data["data"][0]["login"]

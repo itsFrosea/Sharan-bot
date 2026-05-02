@@ -1,10 +1,9 @@
 import os
 import aiohttp
 import secrets
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header
 from fastapi.responses import RedirectResponse
 from dotenv import load_dotenv
-from twitchio import user
 from event_queue import EVENT_QUEUE
 
 load_dotenv()
@@ -23,9 +22,10 @@ CALLBACK_URL = "https://sharan-bot-kp71.onrender.com/eventsub"
 
 SCOPES = "user:read:email chat:read chat:edit channel:read:subscriptions"
 
-if not CLIENT_ID or not CLIENT_SECRET:
-    raise RuntimeError("TWITCH_CLIENT_ID or TWITCH_CLIENT_SECRET missing")
-
+# =========================
+# 🧠 SIMPLE TOKEN STORE
+# =========================
+USER_TOKENS = {}  # {channel: access_token}
 
 # =========================
 # 🔹 LOGIN ROUTE
@@ -55,7 +55,7 @@ async def twitch_callback(code: str, state: str = None):
 
     async with aiohttp.ClientSession() as session:
 
-        # 1️⃣ Exchange user code
+        # 1️⃣ Exchange code → user access token
         token_resp = await session.post(
             "https://id.twitch.tv/oauth2/token",
             params={
@@ -93,7 +93,10 @@ async def twitch_callback(code: str, state: str = None):
 
         print(f"✅ OAuth success for {login}")
 
-        # 3️⃣ Get APP access token (for EventSub)
+        # ✅ STORE TOKEN (IMPORTANT FIX)
+        USER_TOKENS[login] = access_token
+
+        # 3️⃣ Get APP token (EventSub)
         app_token_resp = await session.post(
             "https://id.twitch.tv/oauth2/token",
             params={
@@ -106,18 +109,13 @@ async def twitch_callback(code: str, state: str = None):
         app_token_data = await app_token_resp.json()
         app_access_token = app_token_data.get("access_token")
 
-        if not app_access_token:
-            raise HTTPException(status_code=400, detail=app_token_data)
-
         headers = {
             "Authorization": f"Bearer {app_access_token}",
             "Client-Id": CLIENT_ID,
             "Content-Type": "application/json",
         }
 
-        # =========================
         # 🧹 CLEAN OLD EVENTSUBS
-        # =========================
         sub_resp = await session.get(
             "https://api.twitch.tv/helix/eventsub/subscriptions",
             headers=headers
@@ -126,23 +124,14 @@ async def twitch_callback(code: str, state: str = None):
         sub_data = await sub_resp.json()
 
         for sub in sub_data.get("data", []):
-            condition = sub.get("condition", {})
-
-            if condition.get("broadcaster_user_id") == broadcaster_id:
-                sub_id = sub["id"]
-
+            if sub.get("condition", {}).get("broadcaster_user_id") == broadcaster_id:
                 await session.delete(
                     "https://api.twitch.tv/helix/eventsub/subscriptions",
                     headers=headers,
-                    params={"id": sub_id},
+                    params={"id": sub["id"]},
                 )
 
-                print(f"🧹 Removed old EventSub: {sub_id}")
-
-
-        # =========================
         # 🎯 CREATE EVENTSUB
-        # =========================
         event_types = [
             "stream.online",
             "stream.offline",
@@ -171,7 +160,7 @@ async def twitch_callback(code: str, state: str = None):
 
         print(f"🎯 EventSub created for {login}")
 
-        # 5️⃣ Push onboarding event
+        # 🚀 Queue onboarding
         EVENT_QUEUE.append({
             "type": "channel.added",
             "event": {
@@ -180,23 +169,23 @@ async def twitch_callback(code: str, state: str = None):
             }
         })
 
-        print(f"🚀 Queued onboarding for {login}")
-
-        # 6️⃣ Redirect to setup UI
+        # ❌ REMOVE TOKEN FROM URL
         return RedirectResponse(
-            url=f"https://itsfrosea.github.io/dashboard/dashboard.html"
-                f"?channel={login}"
-                f"&token={access_token}",
+            url=f"https://itsfrosea.github.io/dashboard/dashboard.html?channel={login}",
             status_code=302
         )
-    
+
+
 # =========================
-# 🔐 GET CURRENT USER
+# 🔐 VERIFY USER (FIXED)
 # =========================
-async def get_current_user(token: str):
+async def verify_user(channel: str, authorization: str):
+
+    # get stored token instead of trusting frontend
+    token = USER_TOKENS.get(channel)
 
     if not token:
-        return None
+        raise HTTPException(status_code=403, detail="No stored token")
 
     async with aiohttp.ClientSession() as session:
 
@@ -210,16 +199,11 @@ async def get_current_user(token: str):
 
         if resp.status != 200:
             print("❌ Twitch API error:", resp.status)
-            return None
+            raise HTTPException(status_code=403, detail="Invalid token")
 
         data = await resp.json()
 
-        if "data" not in data or not data["data"]:
-            return None
+        if not data.get("data"):
+            raise HTTPException(status_code=403, detail="User not found")
 
-        user = data["data"][0]["login"]
-
-        print("TOKEN:", token)
-        print("TWITCH USER:", user)
-
-        return user
+        return data["data"][0]["login"]

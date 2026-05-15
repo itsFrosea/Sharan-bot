@@ -4,7 +4,6 @@ import secrets
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import RedirectResponse
 from dotenv import load_dotenv
-from twitchio import user
 from event_queue import EVENT_QUEUE
 
 load_dotenv()
@@ -21,7 +20,14 @@ EVENTSUB_SECRET = os.getenv("TWITCH_EVENTSUB_SECRET")
 REDIRECT_URI = "https://sharan-bot-kp71.onrender.com/auth/twitch/callback"
 CALLBACK_URL = "https://sharan-bot-kp71.onrender.com/eventsub"
 
-SCOPES = "user:read:email chat:read chat:edit channel:read:subscriptions"
+SCOPES = (
+    "user:read:email "
+    "chat:read "
+    "chat:edit "
+    "channel:read:subscriptions "
+    "moderator:read:followers "
+    "bits:read"
+)
 
 if not CLIENT_ID or not CLIENT_SECRET:
     raise RuntimeError("TWITCH_CLIENT_ID or TWITCH_CLIENT_SECRET missing")
@@ -55,7 +61,9 @@ async def twitch_callback(code: str, state: str = None):
 
     async with aiohttp.ClientSession() as session:
 
-        # 1️⃣ Exchange user code
+        # =========================
+        # 1️⃣ EXCHANGE USER CODE
+        # =========================
         token_resp = await session.post(
             "https://id.twitch.tv/oauth2/token",
             params={
@@ -73,7 +81,9 @@ async def twitch_callback(code: str, state: str = None):
         if not access_token:
             raise HTTPException(status_code=400, detail=token_data)
 
-        # 2️⃣ Get user info
+        # =========================
+        # 2️⃣ GET USER INFO
+        # =========================
         user_resp = await session.get(
             "https://api.twitch.tv/helix/users",
             headers={
@@ -87,30 +97,17 @@ async def twitch_callback(code: str, state: str = None):
         if "data" not in user_data or not user_data["data"]:
             raise HTTPException(status_code=400, detail=user_data)
 
-        user = user_data["data"][0]
-        login = user["login"]
-        broadcaster_id = user["id"]
+        twitch_user = user_data["data"][0]
+        login = twitch_user["login"]
+        broadcaster_id = twitch_user["id"]
 
         print(f"✅ OAuth success for {login}")
 
-        # 3️⃣ Get APP access token (for EventSub)
-        app_token_resp = await session.post(
-            "https://id.twitch.tv/oauth2/token",
-            params={
-                "client_id": CLIENT_ID,
-                "client_secret": CLIENT_SECRET,
-                "grant_type": "client_credentials",
-            },
-        )
-
-        app_token_data = await app_token_resp.json()
-        app_access_token = app_token_data.get("access_token")
-
-        if not app_access_token:
-            raise HTTPException(status_code=400, detail=app_token_data)
-
+        # =========================
+        # 3️⃣ USE USER TOKEN FOR EVENTSUB
+        # =========================
         headers = {
-            "Authorization": f"Bearer {app_access_token}",
+            "Authorization": f"Bearer {access_token}",
             "Client-Id": CLIENT_ID,
             "Content-Type": "application/json",
         }
@@ -139,28 +136,55 @@ async def twitch_callback(code: str, state: str = None):
 
                 print(f"🧹 Removed old EventSub: {sub_id}")
 
+        # =========================
+        # 🎯 CREATE EVENTSUBS
+        # =========================
 
-        # =========================
-        # 🎯 CREATE EVENTSUB
-        # =========================
-        event_types = [
-            "stream.online",
-            "stream.offline",
-            "channel.follow",
-            "channel.subscribe",
-            "channel.cheer",
+        subscriptions = [
+            {
+                "type": "stream.online",
+                "version": "1",
+                "condition": {
+                    "broadcaster_user_id": broadcaster_id
+                }
+            },
+            {
+                "type": "stream.offline",
+                "version": "1",
+                "condition": {
+                    "broadcaster_user_id": broadcaster_id
+                }
+            },
+            {
+                "type": "channel.subscribe",
+                "version": "1",
+                "condition": {
+                    "broadcaster_user_id": broadcaster_id
+                }
+            },
+            {
+                "type": "channel.cheer",
+                "version": "1",
+                "condition": {
+                    "broadcaster_user_id": broadcaster_id
+                }
+            },
+            {
+                "type": "channel.follow",
+                "version": "2",
+                "condition": {
+                    "broadcaster_user_id": broadcaster_id,
+                    "moderator_user_id": broadcaster_id
+                }
+            },
         ]
 
-        for event_type in event_types:
-            await session.post(
+        for sub in subscriptions:
+            resp = await session.post(
                 "https://api.twitch.tv/helix/eventsub/subscriptions",
                 headers=headers,
                 json={
-                    "type": event_type,
-                    "version": "1",
-                    "condition": {
-                        "broadcaster_user_id": broadcaster_id
-                    },
+                    **sub,
                     "transport": {
                         "method": "webhook",
                         "callback": CALLBACK_URL,
@@ -169,9 +193,16 @@ async def twitch_callback(code: str, state: str = None):
                 },
             )
 
+            data = await resp.json()
+
+            print(f"📡 {sub['type']} → {resp.status}")
+            print(data)
+
         print(f"🎯 EventSub created for {login}")
 
-        # 5️⃣ Push onboarding event
+        # =========================
+        # 5️⃣ PUSH ONBOARD EVENT
+        # =========================
         EVENT_QUEUE.append({
             "type": "channel.added",
             "event": {
@@ -182,14 +213,19 @@ async def twitch_callback(code: str, state: str = None):
 
         print(f"🚀 Queued onboarding for {login}")
 
-        # 6️⃣ Redirect to setup UI
+        # =========================
+        # 6️⃣ REDIRECT TO DASHBOARD
+        # =========================
         return RedirectResponse(
-            url=f"https://itsfrosea.github.io/dashboard/dashboard.html"
+            url=(
+                f"https://itsfrosea.github.io/dashboard/dashboard.html"
                 f"?channel={login}"
-                f"&token={access_token}",
+                f"&token={access_token}"
+            ),
             status_code=302
         )
-    
+
+
 # =========================
 # 🔐 GET CURRENT USER
 # =========================
@@ -219,7 +255,6 @@ async def get_current_user(token: str):
 
         user = data["data"][0]["login"]
 
-        print("TOKEN:", token)
         print("TWITCH USER:", user)
 
         return user

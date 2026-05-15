@@ -189,7 +189,7 @@ async def twitch_callback(code: str, state: str = None):
                 "version": "2",
                 "condition": {
                     "broadcaster_user_id": broadcaster_id,
-                    "moderator_user_id": broadcaster_id
+                    "moderator_user_id": os.getenv("TWITCH_BOT_ID")
                 }
             },
         ]

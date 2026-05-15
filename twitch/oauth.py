@@ -104,10 +104,25 @@ async def twitch_callback(code: str, state: str = None):
         print(f"✅ OAuth success for {login}")
 
         # =========================
-        # 3️⃣ USE USER TOKEN FOR EVENTSUB
+        # 3️⃣ GET APP TOKEN FOR EVENTSUB
         # =========================
+        app_token_resp = await session.post(
+            "https://id.twitch.tv/oauth2/token",
+            params={
+                "client_id": CLIENT_ID,
+                "client_secret": CLIENT_SECRET,
+                "grant_type": "client_credentials",
+            },
+        )
+
+        app_token_data = await app_token_resp.json()
+        app_access_token = app_token_data.get("access_token")
+
+        if not app_access_token:
+            raise HTTPException(status_code=400, detail=app_token_data)
+
         headers = {
-            "Authorization": f"Bearer {access_token}",
+            "Authorization": f"Bearer {app_access_token}",
             "Client-Id": CLIENT_ID,
             "Content-Type": "application/json",
         }

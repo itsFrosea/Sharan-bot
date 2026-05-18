@@ -302,14 +302,13 @@ async def timed_response(data: dict):
     return {"ok": True}
 
 @router.post("/clip/create")
-async def request_clip(data: dict, authorization: str = Header(None)):
+async def request_clip(data: dict):
 
-    user = await verify_user(data["channel"], authorization)
 
     EVENT_QUEUE.append({
         "type": "clip.create",
         "event": {
-            "channel": user
+            "channel": data["channel"].lower()
         }
     })
 

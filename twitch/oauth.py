@@ -9,6 +9,7 @@ from event_queue import EVENT_QUEUE
 load_dotenv()
 
 router = APIRouter()
+TWITCH_USER_TOKENS = {}
 
 # =========================
 # 🔐 ENV
@@ -26,7 +27,8 @@ SCOPES = (
     "chat:edit "
     "channel:read:subscriptions "
     "moderator:read:followers "
-    "bits:read"
+    "bits:read "
+    "clips:edit"
 )
 
 if not CLIENT_ID or not CLIENT_SECRET:
@@ -101,7 +103,19 @@ async def twitch_callback(code: str, state: str = None):
         login = twitch_user["login"]
         broadcaster_id = twitch_user["id"]
 
+
         print(f"✅ OAuth success for {login}")
+
+        TWITCH_USER_TOKENS[login.lower()] = access_token
+        print(f"🔐 Saved token for {login}")
+
+        EVENT_QUEUE.append({
+            "type": "twitch.token.save",
+            "event": {
+                "channel": login,
+                "token": access_token
+            }
+        })
 
         # =========================
         # 3️⃣ GET APP TOKEN FOR EVENTSUB

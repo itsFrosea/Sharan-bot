@@ -2,6 +2,9 @@ from fastapi import APIRouter, Header, HTTPException
 from twitchio import channel
 from event_queue import EVENT_QUEUE
 from twitch.oauth import get_current_user
+from twitch.oauth import TWITCH_USER_TOKENS
+import aiohttp
+import os
 
 import asyncio
 import json
@@ -297,3 +300,17 @@ async def timed_response(data: dict):
 
     TIMED_CACHE[data["channel"]] = data["data"]
     return {"ok": True}
+
+@router.post("/clip/create")
+async def request_clip(data: dict, authorization: str = Header(None)):
+
+    user = await verify_user(data["channel"], authorization)
+
+    EVENT_QUEUE.append({
+        "type": "clip.create",
+        "event": {
+            "channel": user
+        }
+    })
+
+    return {"success": True}

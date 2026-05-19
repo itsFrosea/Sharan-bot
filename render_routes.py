@@ -302,14 +302,61 @@ async def timed_response(data: dict):
     return {"ok": True}
 
 @router.post("/clip/create")
-async def request_clip(data: dict):
+async def create_clip(data: dict):
 
+    channel = data["channel"].lower()
 
-    EVENT_QUEUE.append({
-        "type": "clip.create",
-        "event": {
-            "channel": data["channel"].lower()
+    token = TWITCH_USER_TOKENS.get(channel)
+
+    if not token:
+        raise HTTPException(
+            status_code=401,
+            detail="Streamer not authenticated with Twitch dashboard"
+        )
+
+    async with aiohttp.ClientSession() as session:
+
+        # get broadcaster id
+        user_resp = await session.get(
+            "https://api.twitch.tv/helix/users",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Client-Id": os.getenv("TWITCH_CLIENT_ID"),
+            }
+        )
+
+        user_data = await user_resp.json()
+
+        if not user_data.get("data"):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid Twitch user"
+            )
+
+        broadcaster_id = user_data["data"][0]["id"]
+
+        # create clip
+        clip_resp = await session.post(
+            "https://api.twitch.tv/helix/clips",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Client-Id": os.getenv("TWITCH_CLIENT_ID"),
+            },
+            params={
+                "broadcaster_id": broadcaster_id
+            }
+        )
+
+        clip_data = await clip_resp.json()
+
+        if not clip_data.get("data"):
+            raise HTTPException(
+                status_code=400,
+                detail=clip_data
+            )
+
+        clip_id = clip_data["data"][0]["id"]
+
+        return {
+            "clip_url": f"https://clips.twitch.tv/{clip_id}"
         }
-    })
-
-    return {"success": True}

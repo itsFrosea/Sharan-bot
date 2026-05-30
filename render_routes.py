@@ -308,6 +308,13 @@ async def create_clip(data: dict):
 
     token = TWITCH_USER_TOKENS.get(channel)
 
+    print("========== CLIP DEBUG ==========")
+    print("CHANNEL:", channel)
+    print("TOKEN FOUND:", bool(token))
+
+    if token:
+        print("TOKEN PREFIX:", token[:20])
+
     if not token:
         raise HTTPException(
             status_code=401,
@@ -327,13 +334,18 @@ async def create_clip(data: dict):
 
         user_data = await user_resp.json()
 
+        print("USER STATUS:", user_resp.status)
+        print("USER DATA:", user_data)
+
         if not user_data.get("data"):
             raise HTTPException(
                 status_code=400,
-                detail="Invalid Twitch user"
+                detail=str(user_data)
             )
 
         broadcaster_id = user_data["data"][0]["id"]
+
+        print("BROADCASTER ID:", broadcaster_id)
 
         # create clip
         clip_resp = await session.post(
@@ -349,13 +361,18 @@ async def create_clip(data: dict):
 
         clip_data = await clip_resp.json()
 
+        print("CLIP STATUS:", clip_resp.status)
+        print("CLIP DATA:", clip_data)
+
         if not clip_data.get("data"):
             raise HTTPException(
                 status_code=400,
-                detail=clip_data
+                detail=str(clip_data)
             )
 
         clip_id = clip_data["data"][0]["id"]
+
+        print("CLIP CREATED:", clip_id)
 
         return {
             "clip_url": f"https://clips.twitch.tv/{clip_id}"

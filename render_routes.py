@@ -308,7 +308,6 @@ async def create_clip(data: dict):
 
     token = TWITCH_USER_TOKENS.get(channel)
 
-    print("========== CLIP DEBUG ==========")
     print("CHANNEL:", channel)
     print("TOKEN FOUND:", bool(token))
 

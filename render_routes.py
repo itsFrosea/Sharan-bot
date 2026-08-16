@@ -15,22 +15,77 @@ LEADERBOARD_CACHE = {}
 COMMANDS_CACHE = {}
 SETTINGS_CACHE = {}
 TIMED_CACHE = {}
+ACCESS_CACHE = {}
 
 # =========================
 # 🔐 AUTH HELPER
 # =========================
 async def verify_user(channel: str, authorization: str):
+
+    channel = channel.lower()
+
+    # =========================
+    # 1️⃣ VERIFY TWITCH LOGIN
+    # =========================
+
     token = authorization.replace("Bearer ", "") if authorization else None
+
     user = await get_current_user(token)
 
-    if not user or user != channel:
-        raise HTTPException(status_code=403, detail="Unauthorized")
-    
+    if not user or user.lower() != channel:
+        raise HTTPException(
+            status_code=403,
+            detail="Unauthorized"
+        )
+
     print("AUTH HEADER:", authorization)
     print("CHANNEL:", channel)
 
-    return user
+    # =========================
+    # 2️⃣ ASK SPARKED FOR ACCESS
+    # =========================
 
+    ACCESS_CACHE.pop(channel, None)
+
+    EVENT_QUEUE.append({
+        "type": "access.check",
+        "event": {
+            "channel": channel
+        }
+    })
+
+    print("🔐 Access check requested:", channel)
+
+    # =========================
+    # 3️⃣ WAIT FOR SPARKED
+    # =========================
+
+    for _ in range(60):
+
+        if channel in ACCESS_CACHE:
+
+            has_access = ACCESS_CACHE.pop(channel)
+
+            print("========== ACCESS RESULT ==========")
+            print("CHANNEL:", channel)
+            print("ACCESS:", has_access)
+            print("===================================")
+
+            if not has_access:
+                raise HTTPException(
+                    status_code=402,
+                    detail="Trial expired or premium subscription required"
+                )
+
+            return user
+
+        await asyncio.sleep(0.1)
+
+    # Sparked didn't respond
+    raise HTTPException(
+        status_code=503,
+        detail="Unable to verify subscription"
+    )
 
 # =========================
 # 💬 ADD CUSTOM COMMAND
@@ -302,9 +357,28 @@ async def timed_response(data: dict):
     return {"ok": True}
 
 @router.post("/clip/create")
-async def create_clip(data: dict):
+async def create_clip(
+    data: dict,
+    authorization: str = Header(None)
+):
 
-    channel = data["channel"].lower()
+    channel = data.get("channel", "").lower()
+
+    if not channel:
+        raise HTTPException(
+            status_code=400,
+            detail="Channel is required"
+        )
+
+    # =========================
+    # 🔐 VERIFY USER + ACCESS
+    # =========================
+
+    await verify_user(channel, authorization)
+
+    # =========================
+    # 🎟️ GET STREAMER TOKEN
+    # =========================
 
     token = TWITCH_USER_TOKENS.get(channel)
 
@@ -320,9 +394,16 @@ async def create_clip(data: dict):
             detail="Streamer not authenticated with Twitch dashboard"
         )
 
+    # =========================
+    # 🎬 CREATE CLIP
+    # =========================
+
     async with aiohttp.ClientSession() as session:
 
-        # get broadcaster id
+        # -------------------------
+        # Get broadcaster ID
+        # -------------------------
+
         user_resp = await session.get(
             "https://api.twitch.tv/helix/users",
             headers={
@@ -336,17 +417,23 @@ async def create_clip(data: dict):
         print("USER STATUS:", user_resp.status)
         print("USER DATA:", user_data)
 
-        if not user_data.get("data"):
+        if user_resp.status != 200 or not user_data.get("data"):
             raise HTTPException(
-                status_code=400,
-                detail=str(user_data)
+                status_code=401,
+                detail={
+                    "error": "Twitch token is invalid or expired",
+                    "twitch_response": user_data
+                }
             )
 
         broadcaster_id = user_data["data"][0]["id"]
 
         print("BROADCASTER ID:", broadcaster_id)
 
-        # create clip
+        # -------------------------
+        # Create clip
+        # -------------------------
+
         clip_resp = await session.post(
             "https://api.twitch.tv/helix/clips",
             headers={
@@ -363,16 +450,32 @@ async def create_clip(data: dict):
         print("CLIP STATUS:", clip_resp.status)
         print("CLIP DATA:", clip_data)
 
-        if not clip_data.get("data"):
+        if clip_resp.status != 202 or not clip_data.get("data"):
             raise HTTPException(
                 status_code=400,
-                detail=str(clip_data)
+                detail={
+                    "error": "Clip creation failed",
+                    "twitch_response": clip_data
+                }
             )
 
         clip_id = clip_data["data"][0]["id"]
 
-        print("CLIP CREATED:", clip_id)
+        print("🎬 CLIP CREATED:", clip_id)
 
         return {
+            "success": True,
+            "clip_id": clip_id,
             "clip_url": f"https://clips.twitch.tv/{clip_id}"
         }
+
+@router.post("/internal/access")
+async def access_response(data: dict):
+
+    channel = data["channel"].lower()
+
+    ACCESS_CACHE[channel] = bool(data["has_access"])
+
+    print("🔐 ACCESS RESPONSE:", channel, data["has_access"])
+
+    return {"ok": True}
